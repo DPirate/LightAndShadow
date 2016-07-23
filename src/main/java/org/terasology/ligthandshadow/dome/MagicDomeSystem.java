@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.terasology.ligthandshadow.barrier;
+package org.terasology.ligthandshadow.dome;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -32,7 +32,6 @@ import org.terasology.math.TeraMath;
 import org.terasology.math.geom.Vector3f;
 import org.terasology.registry.In;
 import org.terasology.utilities.random.FastRandom;
-import org.terasology.world.RelevanceRegionComponent;
 
 @RegisterSystem
 public class MagicDomeSystem extends BaseComponentSystem implements UpdateSubscriberSystem {
@@ -49,24 +48,33 @@ public class MagicDomeSystem extends BaseComponentSystem implements UpdateSubscr
     private float updateDelta;
     private FastRandom random = new FastRandom();
 
+    private Vector3f lastRotation;
+    private Vector3f nextRotation;
+
+    private float rotationInterval = 4.0f;
+    private float rotationTransitionTime = 1.5f;
+    private float baseRotationSpeed = 0.005f;
+
     @Override
     public void postBegin() {
-
-        if (!entityManager.getEntitiesWith(MagicDome.class).iterator().hasNext()) {
+        if (!entityManager.getEntitiesWith(MagicDomeComponent.class).iterator().hasNext()) {
             logger.info("Spawning magic dome!");
 
-            magicDomeEntity = entityManager.create("lightAndShadowResources:magicDome", Vector3f.zero());
-            LocationComponent loc = magicDomeEntity.getComponent(LocationComponent.class);
-            loc.setWorldScale(2 * WORLD_RADIUS * 1.01f);
-            magicDomeEntity.addOrSaveComponent(loc);
-            magicDomeEntity.addOrSaveComponent(new RelevanceRegionComponent());
+            magicDomeEntity = entityManager.create("lightAndShadowResources:magicDome");
             magicDomeEntity.setAlwaysRelevant(true);
 
+            LocationComponent locationComponent = new LocationComponent(Vector3f.zero());
+            locationComponent.setLocalScale(2 * WORLD_RADIUS * 1.01f);
+            magicDomeEntity.saveComponent(locationComponent);
+
             AnimateRotationComponent rotationComponent = new AnimateRotationComponent();
-            rotationComponent.rollSpeed = 0.01f;
-            rotationComponent.pitchSpeed = 0.01f;
-            rotationComponent.yawSpeed = 0.01f;
-            magicDomeEntity.addOrSaveComponent(rotationComponent);
+            rotationComponent.rollSpeed = baseRotationSpeed;
+            rotationComponent.pitchSpeed = baseRotationSpeed;
+            rotationComponent.yawSpeed = baseRotationSpeed;
+            magicDomeEntity.addComponent(rotationComponent);
+
+            lastRotation = Vector3f.one().scale(baseRotationSpeed);
+            nextRotation = new Vector3f(lastRotation);
         }
     }
 
@@ -87,26 +95,44 @@ public class MagicDomeSystem extends BaseComponentSystem implements UpdateSubscr
                 impulse.set(impulse.scale(64).setY(6));
                 player.send(new CharacterImpulseEvent(impulse));
 
-                player.send(new PlaySoundEvent(magicDomeEntity.getComponent(MagicDome.class).hitSound, 2f));
+                player.send(new PlaySoundEvent(magicDomeEntity.getComponent(MagicDomeComponent.class).hitSound, 2f));
             }
         }
     }
 
     @Override
     public void update(float delta) {
+        float newYaw;
+        float newPitch;
+        float newRoll;
+
         updateDelta += delta;
-        if (updateDelta > 2.0f) {
-            for (EntityRef entity : entityManager.getEntitiesWith(MagicDome.class, AnimateRotationComponent.class)) {
-                AnimateRotationComponent rotationComponent = entity.getComponent(AnimateRotationComponent.class);
 
-                rotationComponent.yawSpeed = TeraMath.clamp(rotationComponent.yawSpeed + random.nextFloat(-0.01f, 0.01f), -0.01f, 0.01f);
-                rotationComponent.pitchSpeed = TeraMath.clamp(rotationComponent.pitchSpeed + random.nextFloat(-0.01f, 0.01f), -0.01f, 0.01f);
-                rotationComponent.rollSpeed = TeraMath.clamp(rotationComponent.rollSpeed + random.nextFloat(-0.01f, 0.01f), -0.01f, 0.01f);
+        if (updateDelta > rotationInterval) {
+            updateDelta = 0;
+            lastRotation.set(nextRotation);
 
-                entity.saveComponent(rotationComponent);
+            newYaw = Integer.signum(random.nextInt(-1, 1)) * random.nextFloat(0.9f, 1.1f);
+            newPitch = Integer.signum(random.nextInt(-1, 1)) * random.nextFloat(0.9f, 1.1f);
+            newRoll = Integer.signum(random.nextInt(-1, 1)) * random.nextFloat(0.9f, 1.1f);
+            nextRotation = new Vector3f(newYaw, newPitch, newRoll).scale(baseRotationSpeed);
+        }
+
+        for (EntityRef entity : entityManager.getEntitiesWith(MagicDomeComponent.class, AnimateRotationComponent.class)) {
+            Vector3f rotation = new Vector3f(lastRotation);
+
+            if (updateDelta < rotationTransitionTime) {
+                rotation = Vector3f.lerp(lastRotation, nextRotation, updateDelta / rotationTransitionTime);
+            } else {
+                rotation.set(nextRotation);
             }
 
-            updateDelta = 0;
+            AnimateRotationComponent rotationComponent = entity.getComponent(AnimateRotationComponent.class);
+            rotationComponent.yawSpeed = rotation.x;
+            rotationComponent.pitchSpeed = rotation.y;
+            rotationComponent.rollSpeed = rotation.z;
+
+            entity.saveComponent(rotationComponent);
         }
     }
 }

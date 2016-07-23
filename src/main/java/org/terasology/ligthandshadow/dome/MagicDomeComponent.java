@@ -13,11 +13,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.terasology.ligthandshadow.barrier;
+package org.terasology.ligthandshadow.dome;
 
 import org.terasology.audio.StaticSound;
 import org.terasology.entitySystem.Component;
 
-public class MagicDome implements Component {
+public class MagicDomeComponent implements Component {
     public StaticSound hitSound;
 }
