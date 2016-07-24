@@ -27,6 +27,7 @@ import org.terasology.entitySystem.systems.UpdateSubscriberSystem;
 import org.terasology.itemRendering.components.AnimateRotationComponent;
 import org.terasology.logic.characters.CharacterImpulseEvent;
 import org.terasology.logic.characters.CharacterMoveInputEvent;
+import org.terasology.logic.characters.CharacterMovementComponent;
 import org.terasology.logic.location.LocationComponent;
 import org.terasology.math.TeraMath;
 import org.terasology.math.geom.Vector3f;
@@ -38,22 +39,29 @@ public class MagicDomeSystem extends BaseComponentSystem implements UpdateSubscr
 
     private static final Logger logger = LoggerFactory.getLogger(MagicDomeSystem.class);
 
-    private static final int WORLD_RADIUS = 500;
+    private static final float ROTATION_INTERVAL = 4.0f;
+    private static final float ROTATION_TRANSITION_TIME = 1.5f;
+    private static final float BASE_ROTATION_SPEED = 0.005f;
+    private static final float DOME_RADIUS = 500f;
 
     @In
     private EntityManager entityManager;
-
-    private Vector3f lastPos = Vector3f.zero();
+    private Vector3f lastPosition = Vector3f.zero();
     private EntityRef magicDomeEntity = EntityRef.NULL;
     private float updateDelta;
-    private FastRandom random = new FastRandom();
 
+    private FastRandom random;
     private Vector3f lastRotation;
+
     private Vector3f nextRotation;
 
-    private float rotationInterval = 4.0f;
-    private float rotationTransitionTime = 1.5f;
-    private float baseRotationSpeed = 0.005f;
+    @Override
+    public void initialise() {
+        random = new FastRandom();
+
+        lastRotation = Vector3f.one().scale(BASE_ROTATION_SPEED);
+        nextRotation = new Vector3f(lastRotation);
+    }
 
     @Override
     public void postBegin() {
@@ -63,66 +71,99 @@ public class MagicDomeSystem extends BaseComponentSystem implements UpdateSubscr
             magicDomeEntity = entityManager.create("lightAndShadowResources:magicDome");
             magicDomeEntity.setAlwaysRelevant(true);
 
+            MagicDomeComponent magicDomeComponent = magicDomeEntity.getComponent(MagicDomeComponent.class);
+            magicDomeComponent.radius = DOME_RADIUS;
+            magicDomeEntity.saveComponent(magicDomeComponent);
+
             LocationComponent locationComponent = new LocationComponent(Vector3f.zero());
-            locationComponent.setLocalScale(2 * WORLD_RADIUS * 1.01f);
+            locationComponent.setLocalScale(2 * DOME_RADIUS * 1.01f);
             magicDomeEntity.saveComponent(locationComponent);
 
             AnimateRotationComponent rotationComponent = new AnimateRotationComponent();
-            rotationComponent.rollSpeed = baseRotationSpeed;
-            rotationComponent.pitchSpeed = baseRotationSpeed;
-            rotationComponent.yawSpeed = baseRotationSpeed;
+            rotationComponent.rollSpeed = BASE_ROTATION_SPEED;
+            rotationComponent.pitchSpeed = BASE_ROTATION_SPEED;
+            rotationComponent.yawSpeed = BASE_ROTATION_SPEED;
             magicDomeEntity.addComponent(rotationComponent);
-
-            lastRotation = Vector3f.one().scale(baseRotationSpeed);
-            nextRotation = new Vector3f(lastRotation);
         }
     }
 
     @ReceiveEvent(components = {LocationComponent.class})
-    public void onCharacterMovement(CharacterMoveInputEvent moveInputEvent, EntityRef player, LocationComponent loc) {
-        Vector3f pos = new Vector3f(loc.getWorldPosition());
+    public void onCharacterMovement(CharacterMoveInputEvent moveInputEvent, EntityRef player, LocationComponent playerLocation) {
+        Vector3f position = new Vector3f(playerLocation.getWorldPosition());
+        Vector3f positionDelta = new Vector3f(position).sub(lastPosition);
 
-        float distance = pos.length();
+        for (EntityRef domeEntity : entityManager.getEntitiesWith(MagicDomeComponent.class, LocationComponent.class)) {
+            LocationComponent domeLocationComponent = domeEntity.getComponent(LocationComponent.class);
+            Vector3f domeCenter = domeLocationComponent.getWorldPosition();
+            MagicDomeComponent domeComponent = domeEntity.getComponent(MagicDomeComponent.class);
 
-        float deltaDistance = TeraMath.fastAbs(pos.distance(lastPos));
-        if (deltaDistance > 0.2f) {
-            logger.info("CharacerMoveInputEvent: position: {} - distance from O: {}, delta: {}", pos, distance, deltaDistance);
-            lastPos.set(pos);
+            if (TeraMath.fastAbs(positionDelta.length()) > 0.1f) {
+                float currentDistanceToCenter = position.distance(domeCenter);
+                float lastDistanceToCenter = lastPosition.distance(domeCenter);
 
-            if (distance > WORLD_RADIUS) {
-                logger.info("Sending player back!");
-                Vector3f impulse = pos.normalize().invert();
-                impulse.set(impulse.scale(64).setY(6));
-                player.send(new CharacterImpulseEvent(impulse));
+                if (currentDistanceToCenter > domeComponent.radius-0.4f && lastDistanceToCenter < domeComponent.radius) {
+                    // player tries to escape the dome (inside -> outside)
+                    logger.info("Pushing in!");
+                    Vector3f impulse = new Vector3f(domeCenter).sub(position).normalize();
+                    if (player.hasComponent(CharacterMovementComponent.class)) {
+                        CharacterMovementComponent movementComponent = player.getComponent(CharacterMovementComponent.class);
+                        impulse.scale(movementComponent.getVelocity().length() * 10f);
+                    } else {
+                        impulse.scale(64);
+                    }
+                    impulse.setY(6);
 
-                player.send(new PlaySoundEvent(magicDomeEntity.getComponent(MagicDomeComponent.class).hitSound, 2f));
+                    logger.info("Impulse: {} [{}]", impulse, impulse.length());
+                    player.send(new CharacterImpulseEvent(impulse));
+                    player.send(new PlaySoundEvent(domeComponent.hitSound, 2f));
+                } else if (currentDistanceToCenter < domeComponent.radius+0.4f && lastDistanceToCenter > domeComponent.radius) {
+                    // player tries to get inse the dome (outside -> inside)
+                    logger.info("Pushing out!");
+                    Vector3f impulse = new Vector3f(position).sub(domeCenter).normalize();
+                    if (player.hasComponent(CharacterMovementComponent.class)) {
+                        CharacterMovementComponent movementComponent = player.getComponent(CharacterMovementComponent.class);
+                        impulse.scale(movementComponent.getVelocity().length() * 10f);
+                    } else {
+                        impulse.scale(64);
+                    }
+                    impulse.setY(6);
+
+                    player.send(new CharacterImpulseEvent(impulse));
+                    player.send(new PlaySoundEvent(domeComponent.hitSound, 2f));
+                }
+
+                lastPosition.set(position);
             }
         }
     }
 
     @Override
     public void update(float delta) {
+        updateRotation(delta);
+    }
+
+    private void updateRotation(float delta) {
         float newYaw;
         float newPitch;
         float newRoll;
 
         updateDelta += delta;
 
-        if (updateDelta > rotationInterval) {
+        if (updateDelta > ROTATION_INTERVAL) {
             updateDelta = 0;
             lastRotation.set(nextRotation);
 
             newYaw = Integer.signum(random.nextInt(-1, 1)) * random.nextFloat(0.9f, 1.1f);
             newPitch = Integer.signum(random.nextInt(-1, 1)) * random.nextFloat(0.9f, 1.1f);
             newRoll = Integer.signum(random.nextInt(-1, 1)) * random.nextFloat(0.9f, 1.1f);
-            nextRotation = new Vector3f(newYaw, newPitch, newRoll).scale(baseRotationSpeed);
+            nextRotation = new Vector3f(newYaw, newPitch, newRoll).scale(BASE_ROTATION_SPEED);
         }
 
         for (EntityRef entity : entityManager.getEntitiesWith(MagicDomeComponent.class, AnimateRotationComponent.class)) {
             Vector3f rotation = new Vector3f(lastRotation);
 
-            if (updateDelta < rotationTransitionTime) {
-                rotation = Vector3f.lerp(lastRotation, nextRotation, updateDelta / rotationTransitionTime);
+            if (updateDelta < ROTATION_TRANSITION_TIME) {
+                rotation = Vector3f.lerp(lastRotation, nextRotation, updateDelta / ROTATION_TRANSITION_TIME);
             } else {
                 rotation.set(nextRotation);
             }

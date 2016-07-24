@@ -20,4 +20,5 @@ import org.terasology.entitySystem.Component;
 
 public class MagicDomeComponent implements Component {
     public StaticSound hitSound;
+    public float radius;
 }
